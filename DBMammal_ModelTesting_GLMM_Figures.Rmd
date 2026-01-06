@@ -1,0 +1,829 @@
+---
+title: "Analysis of Variance: Mixed Model & Family Negative Binomial"
+author: "M.A. Hagadorn"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	warning = TRUE,
+	background = "#F7F7F7",
+	highlight = TRUE)
+```
+
+# Load in Required Packages
+
+```{r packages, echo=FALSE, warning=FALSE, message=FALSE}
+library(knitr)
+library(plyr)
+library(dplyr)
+library(Rmisc)
+library(ggplot2)
+library(stats)
+library(nortest)
+library(MASS)
+library(multcomp)
+library(effectsize)
+library(rcompanion) #plotNormalDensity
+library(lme4) #glmer
+library(afex)
+library(RLRsim)
+library(lmerTest)
+library(car)  #qqplot
+library(lmtest)
+library(performance)
+library(DHARMa)
+library(glmmTMB)
+library(reshape2)
+library(cowplot)
+library(ggbreak)
+library(tidyr)
+library(emmeans)
+
+
+installed.packages()[names(sessionInfo()$otherPkgs), "Version"]
+
+#setwd(XXXXX)
+```
+
+
+For this analysis, we are comparing the abundances of dung beetles attracted to specific dung types and habitats. We will do so using a generalized linear mixed model with fixed and random effects. We will compare models of various complexity to determine if the mixed-effects models decrease variance. Further, we are working with count data. So, we will specify "family=Poisson" and then assess overdispersion.
+
+
+
+
+
+# Load in the Data
+
+To start, we are loading in the data that we plan to analyse, assigning factors and levels. These data were reformatted to long version from the original raw file (SupplementalFile_1.csv)
+```{r loaddata}
+
+toab_data0 <- read.csv("SupplementalFile_2.csv", header=T, sep=";")
+toab_data <- toab_data0
+
+toab_data$Species <- factor(toab_data$Species)
+toab_data$Location <- factor(toab_data$Location)
+toab_data$Habitat <- factor(toab_data$Habitat)
+toab_data$Type <- factor(toab_data$Type)
+toab_data$Animal <- factor(toab_data$Animal)
+toab_data$Month <- factor(toab_data$Month, levels = c("June", "July", "Sept"))
+```
+
+
+# Evaluating Models and Model Reduction
+## Model 1: Abundance  ~ Habitat * Animal * Month + (1|Location + Species), family = nbinom2
+Our initial model includes three fixed and two random effects. Specifically, dung type, habitat where the baited pitfall trap was set, and month are the fixed factors while the species and location (2 different collection sites) are random factors. The first model is as follows: **Abundance  ~ Habitat * Animal * Month + (1|Location + Species)**. 
+```{r model1}
+mod1 <- glmmTMB(Abundance  ~ Habitat * Animal * Month + (1|Location + Species), data = toab_data, family = poisson) #poisson for count data
+#summary(mod1)
+
+#checking for overdispersion before moving forward
+check_overdispersion(mod1)
+
+#overdispersion is detected. Evaluating if the negative bionomial model is a better fit.
+
+
+mod1_negbi <- glmmTMB(Abundance  ~ Habitat * Animal * Month + (1|Location + Species), data = toab_data, family = nbinom2) 
+
+#WARNING: 
+#dropping columns from rank-deficient conditional model: Habitatopen:AnimalDeer:MonthJuly, #Habitatopen:AnimalDeer:MonthSept
+
+##compare the two models (family differences) to see which is better, I assume the negbi just correcting for overdispersion
+
+
+mod_fam <- anova(mod1, mod1_negbi)
+mod_fam 
+```
+
+
+The model assuming a poisson distribution shows overdispersion. I compared this model to one assuming a negative bionomial. The model with "family=nbinom2" has a significantly lower AIC score. And so, we will proceed forward using the negative bionomial model.
+
+We did, however, get a warning about rank-deficient conditional model and dropping a single column (Abundance  ~ Habitat * Animal * Month + (1|Location + Species), family = nbinom2). So, before moving forward, I am going to see if the model is better with or without the interaction term. First, I will run summary() on model one to get a gauge of the output.
+
+### Assess the use of both random variables
+Now, I am assessing the negative bionomial module 1 using the "summary()" function. 
+```{r assessrandomvarVar}
+summary(mod1_negbi)
+
+```
+
+Based on the summary of the model, neither "location" or "species" has a variance close to zero, though location is substantially less than species.
+
+## Generate all models to compare best fit
+Now, lets generate all combinations of the modules to assess for best fit, starting with more complex to simplified.
+```{r models}
+mod2_negbi <- glmmTMB(Abundance ~ Habitat + Animal + Month + (1|Location + Species), data = toab_data, family = nbinom2)
+
+mod3_negbi <- glmmTMB(Abundance ~ Habitat + Animal + (1|Location + Species + Month), data = toab_data, family = nbinom2)
+
+mod4_negbi <- glmmTMB(Abundance ~ Habitat + Animal + (1|Location + Species), data = toab_data, family = nbinom2)
+
+mod5_negbi <- glmmTMB(Abundance ~ Habitat + Animal + Month + (1|Species), data = toab_data, family = nbinom2)
+
+mod6_negbi <- glmmTMB(Abundance ~ Habitat + Animal + Month + (1|Location), data = toab_data, family = nbinom2)
+
+mod7_negbi <- glmmTMB(Abundance ~ Habitat * Animal + Month + (1|Location + Species), data = toab_data, family = nbinom2)
+
+mod8_negbi <- glmmTMB(Abundance ~ Habitat * Type * Month + (1|Location + Species), data = toab_data, family = nbinom2)
+
+mod9_negbi <- glmmTMB(Abundance ~ Habitat + Type + Month + (1|Location + Species), data = toab_data, family = nbinom2)
+
+```
+
+## Model 2 comparison: remove interaction term in full model to assess best fit; **Abundance ~ Habitat + Animal + Month + (1|Location + Species)**
+Now we compare the negative binomial versions of model 1 and model 2. From this, we can assess if the models are significantly different, i.e., does the interaction term contribute significantly to the model.
+```{r comparemods}
+modcomp1 <- anova(mod2_negbi, mod1_negbi)
+modcomp1
+
+#AIC Difference
+abs(modcomp1$AIC[1]-modcomp1$AIC[2])
+
+#P
+modcomp1P <- modcomp1$`Pr(>Chisq)`[2]
+
+```
+
+AIC value difference is greater than 2.0 (`r abs(modcomp1$AIC[1] - modcomp1$AIC[2])`) and the P-value comparing the model is significant (p = `r modcomp1P`). That said, given the rank-deficiency of the full model (interaction terms) we are going to proceed forward with other model comparisons.
+
+## Model 3 comparisons: Month as a random factor **Abundance ~ Habitat + Animal + (1|Location + Species + Month)**
+### Type of variable assignment of month: fixed or random?
+```{r model3}
+#compare the model with different placement of month
+modcomp2 <- anova(mod3_negbi, mod2_negbi)
+modcomp2
+
+#AIC Difference
+abs(modcomp2$AIC[1]-modcomp2$AIC[2])
+
+#P
+modcomp2P <- modcomp2$`Pr(>Chisq)`[2]
+
+```
+
+The AIC score difference *IS* greater than 2.0 (`r abs(modcomp2$AIC[1] - modcomp2$AIC[2])`) and the P-value comparing the model is significant (p=`r modcomp2P `). The AIC score for model 2 (full model, no interaction, month as fixed factor) is: `r modcomp2$AIC[2]`), whereas the AIC score for model that shifts month to a random factor is: `r modcomp2$AIC[1]`. Thus, the model including month as a fixed factor is a better fit.
+
+
+## Model 2 (best fit so far) vs reduced models:
+### Is month important?
+Now, we are comparing the model with month as a fixed factor to a model that excludes month entirely.
+```{r model2V4}
+#compare the models when one lacks month entirely
+modcomp3 <- anova(mod4_negbi, mod2_negbi)
+modcomp3
+
+#AIC Difference
+abs(modcomp3$AIC[1]-modcomp3$AIC[2])
+
+#P
+modcomp3P <- modcomp3$`Pr(>Chisq)`[2]
+
+```
+
+The AIC score difference *IS* greater than 2.0 (`r abs(modcomp3$AIC[1] - modcomp3$AIC[2])`) and the P-value comparing the model is significant (p=`r modcomp3P `). The AIC score for model 2 (full model, no interaction, month as fixed factor) is: `r modcomp3$AIC[2]`), whereas the AIC score for model that shifts month to a random factor is: `r modcomp3$AIC[1]`. Thus, the reduced model is a worse fit. We will proceed forward with the full model: **Abundance ~ Habitat + Animal + Month + (1|Location + Species), data = toab_data, family = nbinom2**.
+
+
+### Is location important?
+Now, we are going to determine if Location is an important factor.
+```{r model2v5}
+#with location removed
+modcomp4 <- anova(mod5_negbi, mod2_negbi)
+modcomp4
+
+#AIC Difference
+abs(modcomp4$AIC[1]-modcomp4$AIC[2])
+
+#P
+modcomp4P <- modcomp4$`Pr(>Chisq)`[2]
+
+```
+
+The AIC score difference *IS* greater than 2.0 (`r abs(modcomp4$AIC[1] - modcomp4$AIC[2])`) and the P-value comparing the model is significant (p=`r modcomp4P `). The AIC score for model 2 (full model, no interaction, month as fixed factor) is: `r modcomp4$AIC[2]`), whereas the AIC score for model that removes location is: `r modcomp4$AIC[1]`. Thus, the reduced model is a worse fit. We will proceed forward with the full model: **Abundance ~ Habitat + Animal + Month + (1|Location + Species), data = toab_data, family = nbinom2**.
+
+
+### Is species important?
+Now, we are going to determine if species is an important factor.
+```{r model2v6}
+#with location removed
+modcomp5 <- anova(mod6_negbi, mod2_negbi)
+modcomp5
+
+#AIC Difference
+abs(modcomp5$AIC[1]-modcomp5$AIC[2])
+
+#P
+modcomp5P <- modcomp5$`Pr(>Chisq)`[2]
+
+```
+
+The AIC score difference *IS* greater than 2.0 (`r abs(modcomp5$AIC[1] - modcomp5$AIC[2])`) and the P-value comparing the model is significant (p=`r modcomp5P `). The AIC score for model 2 (full model, no interaction, month as fixed factor) is: `r modcomp5$AIC[2]`), whereas the AIC score for model excludes species: `r modcomp5$AIC[1]`. Thus, the reduced model is a worse fit. We will proceed forward with the full model: **Abundance ~ Habitat + Animal + Month + (1|Location + Species), data = toab_data, family = nbinom2**.
+
+
+
+## Summarize model fit
+```{r kablefit}
+Models <- c("Abundance  ~ Habitat * Animal * Month + (Loc + Sp)", "Abundance  ~ Habitat * Animal * Month + (Loc + Sp)", "Abundance ~ Habitat + Animal + Month + (Loc + Sp)", "Abundance ~ Habitat + Animal + (Loc + Sp + Month)", "Abundance ~ Habitat + Animal + (Loc + Sp)", "Abundance ~ Habitat + Animal + Month + (Sp)", "Abundance ~ Habitat + Animal + Month + (Loc)")
+Family <- c("P", rep("NB", 6))
+DFs <- c(mod_fam$Df[1], mod_fam$Df[2], modcomp2$Df[2], modcomp2$Df[1], modcomp3$Df[1], modcomp4$Df[1], modcomp5$Df[1])
+AICs <- c(AIC(mod1), AIC(mod1_negbi), AIC(mod2_negbi), AIC(mod3_negbi), AIC(mod4_negbi), AIC(mod5_negbi), AIC(mod6_negbi))
+Selected <- c("no", "no", "yes", "no", "no", "no", "no")
+
+sum_tab <- data.frame(Models, Family, DFs, AICs, Selected)
+
+
+kable(sum_tab)
+
+```
+
+
+
+
+
+
+
+# Run Analysis with full model but no interaction: Abundance  ~ Habitat + Type + (1|Location + Species); family=negative bionomial
+For the analysis, we will move forward with the GLMM that incorporates habitat, animal, and month as fixed factors, without testing an interaction, and location and species as a random factor.
+```{r assignthefinalmodel}
+#this is mod2_negbi
+toab_glmm <- glmmTMB(Abundance ~ Habitat + Animal + Month + (1|Location + Species), data = toab_data, family = nbinom2)
+```
+
+
+## Summary Statistics
+```{r ss_toab, echo=FALSE}
+ss <- summarySE(toab_data, measurevar = "Abundance", groupvars = c("Habitat", "Animal", "Month"))
+kable(ss)
+
+# ss_species <- summarySE(toab_data, measurevar = "Abundance", groupvars = c("Species", "Animal", "Month"))
+# kable(ss_species)
+
+ss_justAnMonth <- summarySE(toab_data, measurevar = "Abundance", groupvars = c("Animal", "Month"))
+kable(ss_justAnMonth)
+
+ss_sponly <- summarySE(toab_data, measurevar = "Abundance", groupvars = c("Species", "Month"))
+kable(ss_sponly)
+
+ss_justanimal <- summarySE(toab_data, measurevar = "Abundance", groupvars = c("Animal"))
+kable(ss_justanimal)
+
+ss_MT <- summarySE(toab_data, measurevar = "Abundance", groupvars = c("Month", "Type"))
+kable(ss_MT)
+
+```
+
+\newpage
+
+```{r ss_toab2, echo=FALSE}
+ss_sponly <- summarySE(toab_data, measurevar = "Abundance", groupvars = c("Species", "Month"))
+kable(ss_sponly)
+
+ss_justanimal <- summarySE(toab_data, measurevar = "Abundance", groupvars = c("Animal"))
+kable(ss_justanimal)
+
+```
+
+## Run Model
+```{r glmm_run}
+summary(toab_glmm)
+
+#get an anova table
+#type two because there is no significant interaction term
+Anova(toab_glmm, type = "II", test.statistic = "Chisq")
+
+
+# Calculate percent more
+#percent_more <- function(higher, lower)((higher - lower) / lower) * 100
+
+
+ratio_pmore <- function(em_df, col, higher, lower) {
+  # Ensure the grouping column is character
+  em_df[[col]] <- as.character(em_df[[col]])
+  
+  # Extract the estimated means
+  mean_higher <- em_df$response[em_df[[col]] == higher]
+  mean_lower  <- em_df$response[em_df[[col]] == lower]
+  
+  # Calculate ratio and percent more
+  ratio <- mean_higher / mean_lower
+  percent_more <- (ratio - 1) * 100
+  
+  # Return results
+  list(
+    higher = higher,
+    lower = lower,
+    ratio = ratio,
+    percent_more = percent_more
+  )
+}
+
+
+##POSTHOC
+
+#Habitat
+##emmeans
+emm_hab <- emmeans(toab_glmm, ~ Habitat, type = "response", weights = "proportional")
+#estimated marginal means
+pairs(emm_hab, adjust = "bonferroni")
+#Letters
+multcomp::cld(emm_hab, adjust = "bonferroni", Letters = letters)
+
+emm_hab_df <- as.data.frame(emm_hab)
+emm_hab_df
+
+
+ratio_pmore(emm_hab_df, "Habitat", "open", "forest")
+
+
+# percent_more(emm_hab_df$response[emm_hab_df$Habitat == "open"], emm_hab_df$response[emm_hab_df$Habitat == "forest"])
+# 
+# 
+# contrast(emm_hab_df, "ratio", ref = "forest", adjust = "none")
+
+
+##Type of animal generating dung
+##emmeans
+emm_animal <- emmeans(toab_glmm, ~ Animal, type = "response", weights = "proportional")
+#estimated marginal means
+pairs(emm_animal, adjust = "bonferroni")
+#Letters
+multcomp::cld(emm_animal, adjust = "bonferroni", Letters = letters)
+
+emm_animal_df <- as.data.frame(emm_animal)
+emm_animal_df
+
+##bear v wolf
+ratio_pmore(emm_animal_df, "Animal", "Bear/Dog", "Wolf")
+
+# percent_more(emm_animal_df$response[emm_animal_df$Animal == "Bear"], emm_animal_df$response[emm_animal_df$Animal == "Wolf"])
+# 
+# contrast(emm_animal_df, "ratio", ref = "Wolf", adjust = "none")
+
+##bear v deer
+ratio_pmore(emm_animal_df, "Animal", "Bear/Dog", "Deer")
+
+# percent_more(emm_animal_df$response[emm_animal_df$Animal == "Bear"], emm_animal_df$response[emm_animal_df$Animal == "Deer"])
+# 
+# contrast(emm_animal_df, "ratio", ref = "Deer", adjust = "none")
+
+##alpaca v deer
+ratio_pmore(emm_animal_df, "Animal", "Alpaca", "Deer")
+
+# percent_more(emm_animal_df$response[emm_animal_df$Animal == "Alpaca"], emm_animal_df$response[emm_animal_df$Animal == "Deer"])
+
+
+
+##Month
+##emmeans
+emm_month <- emmeans(toab_glmm, ~ Month, type = "response", weights = "proportional")
+#estimated marginal means
+pairs(emm_month, adjust = "bonferroni")
+#Letters
+multcomp::cld(emm_month, adjust = "bonferroni", Letters = letters)
+
+emm_month_df <- as.data.frame(emm_month)
+emm_month_df
+
+##June v July
+ratio_pmore(emm_month_df, "Month", "June", "July")
+
+
+# percent_more(emm_month_df$response[emm_month_df$Month == "June"], emm_month_df$response[emm_month_df$Month == "July"])
+# 
+# contrast(emm_month_df, "ratio", ref = "July", adjust = "none")
+
+#June v September
+ratio_pmore(emm_month_df, "Month", "June", "Sept")
+# percent_more(emm_month_df$response[emm_month_df$Month == "June"], emm_month_df$response[emm_month_df$Month == "Sept"])
+# 
+# contrast(emm_month_df, "ratio", ref = "Sept", adjust = "none")
+
+```
+
+
+## Testing Parametric Assumptions
+```{r assumptions}
+
+res.toab <- residuals(toab_glmm)
+par(mfrow=c(1,2))
+plotNormalDensity(res.toab)
+qqPlot(res.toab, "norm")
+
+#Anderson Darling test for normality
+#Ho: The residuals are normally distributed
+#Ha: The residuals are not normally distributed
+#aka if the p-value is <0.05 then you can conclude that the data are not normally distributed
+print(shapiro.test(res.toab))
+
+#Homogeneity of variance
+#Ho: The distributions are the same.
+#Ha: The distributions are not the same.
+#aka if the p-value is <0.05 then you can conclude a lack of homogenetity of variance.
+
+#do levene's test
+#levene.test or leveneTest in R can't work with a random variable and a non fully crossed design (i.e., it has to consider that interaction term, even if it isn't in our model.)
+leveneTest(residuals(toab_glmm)  ~ Habitat * Animal * Month, data = toab_data)
+
+#another check
+check_homogeneity(toab_glmm)
+
+
+##Assessing the residuals Using DPharm
+#https://cran.r-project.org/web/packages/DHARMa/vignettes/DHARMa.html
+
+simres_toabglmm <- simulateResiduals(fittedModel = toab_glmm, plot = F)
+#This calculates randomized quantile residuals. Contains simulations and the scaled residuals
+
+res_norm <- residuals(simres_toabglmm , quantileFunction = qnorm, outlierValues = c(-7,7))
+
+plotQQunif(simres_toabglmm) # left plot in plot.DHARMa()
+plotResiduals(simres_toabglmm) # right plot in plot.DHARMa()
+
+```
+
+
+```{r checkmodel, fig.height=9, fig.width=7}
+#visual
+check_model(toab_glmm)
+```
+
+
+
+
+
+# Figures
+I'm going to make the figures as DLP and I discussed.
+
+## Figure 1: bar and line
+```{r makegraphs}
+#get data set up for box plot and line graph
+bp_data <- toab_data[,c("Habitat", "Type", "Abundance")]
+
+melt_toab <- melt(bp_data)
+
+#assign order levels
+melt_toab$Habitat <- factor(melt_toab$Habitat, levels=c("forest", "open"))
+melt_toab$Type <- factor(melt_toab$Type, levels=c("Carnivore", "Herbivore", "Omnivore"))
+
+#Assigning specific sizes, changes to figures will reflect changes made here. Keep consistent with Exp.1 figures
+generalsize <- 14
+legendsize <- 7
+wordsize <- 12
+lettersize <- 3
+dotsize <- 3
+```
+
+
+```{r boxplots}
+# Recalculate summary with Habitat on x-axis
+melt_df_plot <- melt_toab %>%
+  group_by(Habitat, Type) %>%
+  summarise(mean = mean(value), 
+            se = sd(value) / sqrt(n()), 
+            .groups = "drop")
+
+h_b <- 55
+h_t <- 60
+
+
+# Plot with Habitat on x-axis and bars colored by Type
+bp_A <- ggplot(melt_df_plot, aes(x = Habitat, y = mean, fill = factor(Type))) +
+  geom_col(position = position_dodge(width = .75), width = 0.9, color = "black") +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se),
+                position = position_dodge(width = 0.9), width = 0.2) +
+  geom_jitter(data = melt_toab, aes(x = Habitat, y = value, color = factor(Type)),
+              position = position_jitterdodge(dodge.width = 0.75, jitter.width = 0.55, seed = 2025),
+              alpha = 0.65, size = dotsize) +
+  scale_fill_manual(values = c("Carnivore" = "white", "Herbivore" = "gray", "Omnivore" = "gray45")) +  # Customize as needed
+  scale_color_manual(values = c("Carnivore" = "darkred", "Herbivore" = "forestgreen", "Omnivore" = "goldenrod2")) +
+  scale_y_continuous(name = "Abundance", limits = c(-1, 70), breaks = seq(0, 70, 10), expand = expansion(mult = c(0, 0.01))) +
+  scale_x_discrete(name = "", labels = c("Forest", "Open")) +
+  ggtitle("A") +
+  
+  annotate(geom="text", x=1.5, y=h_t + 2, label="*", color="black", size = 10) +
+  
+  # Bracket
+  geom_segment(aes(x = 1, xend = 2, y = h_t, yend = h_t)) +  # horizontal top
+  geom_segment(aes(x = 1, xend = 1, y = h_b, yend = h_t)) +  # left vertical
+  geom_segment(aes(x = 2, xend = 2, y = h_b, yend = h_t)) +      # right vertical
+  
+  
+  
+  theme(
+    text = element_text(color = "black", size = generalsize, family = "sans"),
+    axis.title = element_text(color = "black", size = 14),
+    axis.text.x = element_text(color = "black", size = wordsize),
+    axis.text.y = element_text(color = "black", size = wordsize, margin = margin(l = 2, r = 2)),
+    axis.ticks.length = unit(0.2, "cm"),
+    axis.ticks = element_line(color = "black", size = 0.3),
+    legend.position = "none",
+    panel.background = element_rect(fill = "white"),
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(size = 0.5, linetype = "solid", colour = "black"),
+    plot.margin = margin(t = 1, 0, b = -12, 0),
+    plot.title = element_text(size = 16, margin = margin(t = 1, r = 0, b = 0, l = 0), face = "bold", vjust = 1.75, hjust = -.12)
+  )
+
+```
+
+
+```{r linebymonth}
+
+line_data <- toab_data[, c("Type", "Month", "Abundance")]
+melt_toab_line <- melt(line_data)
+
+# Assign month order (incl. August even though it's missing from data)
+month_levels <- c("June", "July", "August", "Sept")
+
+# Summarize mean and SE by Month and Type (no Habitat)
+melt_df_lineavg <- melt_toab_line %>%
+  group_by(Month, Type) %>%
+  summarise(
+    mean = mean(value, na.rm = TRUE),
+    se = sd(value, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(Month = factor(Month, levels = month_levels, ordered = TRUE))
+
+# Interpolate August between July and September, per Type
+august_data <- melt_df_lineavg %>%
+  filter(Month %in% c("July", "Sept")) %>%
+  group_by(Type) %>%
+  summarise(
+    mean = mean(mean, na.rm = TRUE),
+    se = mean(se, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(Month = factor("August", levels = month_levels, ordered = TRUE))
+
+# Combine original data and artificial August
+combined_df <- bind_rows(melt_df_lineavg, august_data)
+
+# Refactor Month after combination and ensure all levels present
+combined_df <- combined_df %>%
+  mutate(Month = factor(Month, levels = month_levels, ordered = TRUE)) %>%
+  arrange(Type, Month)
+
+# Ensure every Month-Type combination exists (will fill with NAs if missing)
+melt_df_lineavg_aug <- complete(combined_df, Month, Type)
+
+# Get numeric position of "August" for vertical dotted line
+august_pos <- which(levels(melt_df_lineavg_aug$Month) == "August")
+
+# Plot
+line_b <- ggplot(melt_df_lineavg_aug, aes(x = Month, y = mean, group = Type, color = Type)) +
+  geom_vline(xintercept = august_pos, linetype = "longdash", color = "grey", linewidth = 1.5) +
+  geom_line(linewidth = 1.75, na.rm = TRUE) +
+  geom_point(data = filter(melt_df_lineavg_aug, !is.na(mean) & Month != "August"), size = 4) +
+  geom_errorbar(data = filter(melt_df_lineavg_aug, !is.na(mean) & Month != "August"),
+                aes(ymin = mean - se, ymax = mean + se),
+                width = 0.2, linewidth = 1.75) +
+  scale_color_manual(values = c("Carnivore" = "darkred", "Herbivore" = "forestgreen", "Omnivore" = "goldenrod2"), guide = "none") +
+  scale_y_continuous(name = "Abundance", limits = c(-.2, 15), breaks = seq(0, 15, 5),  expand = expansion(mult = c(0, 0.01))) +
+  scale_x_discrete(name = NULL, labels = c("June", "July", "August", "September")) +
+  #labs(x = "Month") +
+    ggtitle("B") +
+  
+  annotate(geom="text", x=1, y=14.5, label="a", color="black", size = 6) +
+  annotate(geom="text", x=2, y=14.5, label="b", color="black", size = 6) + 
+  annotate(geom="text", x=4, y=14.5, label="b", color="black", size = 6) +
+  
+  
+theme(text = element_text(color = "black", size = generalsize, family = "sans"),
+    axis.title = element_text(color = "black", size =14),
+    axis.text.x = element_text(color = "black", size = wordsize),  # simplified
+    axis.text.y = element_text(color = "black", size = wordsize, margin = margin(l = 2, r = 2)),
+    axis.ticks.margin = unit(0, "cm"),
+    axis.ticks.length = unit(0.2, "cm"),
+    axis.ticks = element_line(color = "black", size = 0.3),
+    #legend.title = element_blank(),
+    legend.position = "none",
+    #legend.margin = margin(l = 0.6, r = 0.6, t = 0.5, b = 0.5),
+    #legend.spacing.y = unit(0, "pt"),
+    #legend.spacing.x = unit(0.3, "pt"),
+    #legend.background = element_rect(fill = "white", size = 0.25, linetype = "solid", colour = "black"),
+    #legend.key = element_rect(fill = "white"),
+    #legend.text = element_text(size = legendsize),
+    #legend.key.height = unit(17, "pt"),
+    #legend.key.width = unit(0.4, "cm"),
+    panel.background = element_rect(fill = "white"),
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(size = 0.5, linetype = "solid", colour = "black"),
+    plot.margin = margin(t = 1, 0, b = 4.5, 0),
+    plot.title = element_text(size = 16, margin = margin(t = 1, r = 0, b = 0, l = 0), face = "bold", vjust = 1.75, hjust = -.12))
+```
+
+
+```{r panel}
+fig1 <- plot_grid(bp_A, line_b, 
+          #labels = c("A", "B"), 
+          #label_size = 16, 
+          ncol = 2, 
+          align = "v")  # vertical alignment of axes
+
+
+fig1
+
+ggsave("Fig1_panel.tiff", plot = fig1, device = "tiff", 
+       width = 10, height = 5, units = "in", dpi = 600) 
+
+ggsave("Fig1_panel.png", plot = fig1, device = "png", 
+       width = 10, height = 5, units = "in", dpi = 600) 
+
+```
+
+
+
+## Figure 2: Animal dung, species, and abundance
+```{r bigboyplot, fig.height=9, fig.width=8}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+
+# Prepare and aggregate data by Species–Animal pair
+fig2_data <- toab_data %>%
+  dplyr::group_by(Species, Animal) %>%
+  dplyr::summarise(Abundance = sum(Abundance), .groups = "drop")
+
+
+
+# Normalize within species and animal
+fig2_data <- fig2_data %>%
+  dplyr::group_by(Species) %>%
+  dplyr::mutate(Prop_Species = Abundance / sum(Abundance)) %>%
+  dplyr::ungroup() %>%
+  dplyr::group_by(Animal) %>%
+  dplyr::mutate(Prop_Animal = Abundance / sum(Abundance)) %>%
+  dplyr::ungroup()
+
+# Total abundance proportions for species and animals
+species_totals <- fig2_data %>%
+  dplyr::group_by(Species) %>%
+  dplyr::summarize(Total_Abundance = sum(Abundance)) %>%
+  dplyr::mutate(Proportion = Total_Abundance / sum(Total_Abundance)) %>%
+  dplyr::arrange(desc(Proportion))
+
+animal_totals <- fig2_data %>%
+  dplyr::group_by(Animal) %>%
+  dplyr::summarize(Total_Abundance = sum(Abundance)) %>%
+  dplyr::mutate(Proportion = Total_Abundance / sum(Total_Abundance)) %>%
+  dplyr::arrange(desc(Proportion))
+
+# Add gaps between bars
+gap_species <- 1 / (nrow(species_totals) * 5)
+gap_animal <- 1 / (nrow(animal_totals) * 5)
+
+species_heights <- species_totals %>%
+  dplyr::mutate(
+    ymin = cumsum(dplyr::lag(Proportion + gap_species, default = 0)),
+    ymax = ymin + Proportion
+  )
+
+animal_heights <- animal_totals %>%
+  dplyr::mutate(
+    ymin = cumsum(dplyr::lag(Proportion + gap_animal, default = 0)),
+    ymax = ymin + Proportion
+  )
+
+# Join coordinates to main data
+fig2_data <- fig2_data %>%
+  dplyr::left_join(species_heights, by = "Species") %>%
+  dplyr::rename(S_ymin = ymin, S_ymax = ymax) %>%
+  dplyr::left_join(animal_heights, by = "Animal") %>%
+  dplyr::rename(A_ymin = ymin, A_ymax = ymax)
+
+# Compute link positions within bars
+fig2_data <- fig2_data %>%
+  dplyr::group_by(Species) %>%
+  dplyr::mutate(
+    S_total = sum(Abundance),
+    S_prop = Abundance / S_total,
+    S_ymin_link = dplyr::lag(cumsum(S_prop * (S_ymax - S_ymin)), default = 0) + S_ymin,
+    S_ymax_link = S_ymin_link + S_prop * (S_ymax - S_ymin)
+  ) %>%
+  dplyr::ungroup() %>%
+  dplyr::group_by(Animal) %>%
+  dplyr::mutate(
+    A_total = sum(Abundance),
+    A_prop = Abundance / A_total,
+    A_ymin_link = dplyr::lag(cumsum(A_prop * (A_ymax - A_ymin)), default = 0) + A_ymin,
+    A_ymax_link = A_ymin_link + A_prop * (A_ymax - A_ymin)
+  ) %>%
+  dplyr::ungroup()
+
+# Assign plotting priority and sort ribbons: highest priority (largest) last so they overlay
+fig2_data <- fig2_data %>%
+  dplyr::mutate(
+    ribbon_prop = pmax(S_prop, A_prop),
+    priority = dplyr::case_when(
+      (Animal == "Bear") ~ 3L,                                # Highest priority: drawn last (top)
+      (Animal == "Alpaca" & Species == "oscarinus") ~ 2L,    # Next highest
+      Species %in% c("Omorgus", "Alloblackburneous") ~ 0L,    # Lowest priority: drawn first (bottom)
+      TRUE ~ 1L
+    )
+  ) %>%
+  dplyr::arrange(priority, desc(ribbon_prop))  # sort so low priority drawn first
+
+# Build polygon coordinates for ribbons
+polygon_data <- fig2_data %>%
+  dplyr::rowwise() %>%
+  dplyr::mutate(
+    x = list(c(1.5, 4.5, 4.5, 1.5)),
+    y = list(c(S_ymin_link, A_ymin_link, A_ymax_link, S_ymax_link))
+  ) %>%
+  tidyr::unnest(c(x, y)) %>%
+  dplyr::group_by(Species, Animal, priority) %>%
+  dplyr::mutate(point_id = dplyr::row_number()) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(priority, Species, Animal, point_id)
+
+# Define unique colors for each Animal
+animal_colors <- c(
+  "Bear/Dog" = "darkgoldenrod2",
+  "Deer" = "#009E73",
+  "Alpaca" = "#56B4E9",
+  "Wolf" = "blueviolet",
+  "Bobcat" = "orangered"
+)
+
+#species order with correct naming
+Species_aes <- as.character(species_heights$Species)
+Species_aes <- gsub("_", " ", Species_aes)
+Species_aes <- sub("s1", "s 1", Species_aes)
+Species_label <- dplyr::case_when(
+  Species_aes == "Trox species 1" ~ "italic('Trox')~'species 1'",
+  Species_aes == "Copris minitus" ~ "italic('Copris minutus')", #correct spelling
+  Species_aes == "Onthophagus pennsyvanicus" ~ "italic('Onthophagus pennsylvanicus')", #correct spelling
+  TRUE ~ paste0("italic('", Species_aes, "')")  # default
+)# Species_label <- dplyr::case_when(
+#   Species_aes == "Trox species 1" ~ "italic('Trox')~'species 1'",
+#   TRUE ~ paste0("italic('", Species_aes, "')")
+# )
+
+
+
+
+
+
+# Plot
+fig2 <- ggplot() +
+  # Species bars
+  geom_rect(data = species_heights,
+            aes(xmin = 1, xmax = 1.5, ymin = ymin, ymax = ymax),
+            fill = "gray45") +
+  # Animal bars
+  geom_rect(data = animal_heights,
+            aes(xmin = 4.5, xmax = 5, ymin = ymin, ymax = ymax),
+            fill = "gray45") +
+  # Connecting ribbons colored by Animal
+  geom_polygon(
+    data = polygon_data,
+    aes(x = x, y = y, group = interaction(Species, Animal), fill = Animal, alpha=0.75),
+    color = "black",
+    linewidth = 0.3
+  ) +
+  # Species labels
+  geom_text(data = species_heights,
+            aes(x = .9, y = (ymin + ymax) / 2, label = Species_label),
+            hjust = 1, size = 4, parse = TRUE, family = "sans") +
+  
+  # Animal labels
+  geom_text(data = animal_heights,
+            aes(x = 5.1, y = (ymin + ymax) / 2, label = Animal),
+            hjust = 0, size = 4, family = "sans") +
+  
+  scale_fill_manual(values = animal_colors) +
+  coord_cartesian(clip = "off") +
+  theme_void() +
+  theme(
+    plot.margin = margin(t=5, r=49, b=2, l=149, unit = "pt"),
+    #aspect.ratio = 1.3,
+    legend.position = "none", 
+    #plot.background = element_rect(fill = "lightblue"),
+    #panel.background = element_rect(fill = "pink")
+  ) +
+
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_continuous(expand = c(0, 0))
+
+fig2
+
+ggsave("Fig2.tiff", plot = fig2, device = "tiff", 
+      width = 8, height = 10, units = "in", dpi = 1000, bg = "white") 
+
+ggsave("Fig2.png", plot = fig2, device = "png", 
+       width = 8, height = 10, units = "in", dpi = 1000, bg = "white") 
+
+```
+
