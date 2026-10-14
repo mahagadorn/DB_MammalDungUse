@@ -17,10 +17,11 @@ Name of Markdown File (Rscript): DBMammal_ModelTesting_GLMM_Figures <br />
 -Used to reformating the raw data to an R-friendly, long-table format. <br />
 -Input = SupplementalFile_2.csv <br />
 -output = A pdf file documenting model testing and GLMM results. Manuscript figures generated. <br />
+-notes: figures can be generated without running analysis portion of the code. To do so, run chunk 1 and 2 and all subsequent figure chunks. <br />
 
 
 Manuscript authors: <br />
-Kendall Beauchamp, Mallory A. Hagadorn, Isabella Garrison, and Dana L. Price (corresponding author)
+Kendall Beauchamp (co first), Mallory A. Hagadorn (co first), Isabella Garrison, and Dana L. Price (corresponding author)
 
 
 Link to Publication: N/A (not published)
